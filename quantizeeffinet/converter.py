@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Union, Optional, Dict, Tuple, Literal
 import logging
 from .utils import make_model
+from .onnx_to_trtengine import *
 
 
 class ModelConverter:
@@ -24,10 +25,7 @@ class ModelConverter:
         max_workspace_size (int): Maximum GPU memory for TensorRT (bytes)
     """
 
-    def __init__(
-            self,
-            max_workspace_size: int = 1 << 30
-    ):
+    def __init__(self, max_workspace_size: int = (1 << 30)):
         self.max_workspace_size = max_workspace_size
         self.trt_logger = trt.Logger(trt.Logger.WARNING)
         self.logger = self._setup_logger()
@@ -110,9 +108,8 @@ class ModelConverter:
             return onnx_model
 
         except Exception as e:
-            self.logger.error(f"✗ ONNX conversion failed: {e}")
+            self.logger.error(f"ONNX conversion failed: {e}")
             raise RuntimeError(f"Failed to convert to ONNX: {e}")
-
 
     def _validate_onnx(self, onnx_path: Path) -> bool:
         """
@@ -127,10 +124,10 @@ class ModelConverter:
         try:
             model = onnx.load(str(onnx_path))
             onnx.checker.check_model(model)
-            self.logger.info("  ONNX model validation passed")
+            self.logger.info("ONNX model validation passed")
             return True
         except Exception as e:
-            self.logger.warning(f"  ONNX validation failed: {e}")
+            self.logger.warning(f"ONNX validation failed: {e}")
             return False
 
     def convert_to_trt(

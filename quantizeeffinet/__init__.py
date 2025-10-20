@@ -15,7 +15,6 @@ Usage:
 """
 
 from .converter import *
-from .utils import *
 
 # Package metadata
 __version__ = "1.0.0"
