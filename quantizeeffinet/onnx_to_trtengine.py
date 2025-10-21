@@ -1,6 +1,6 @@
 import warnings
 from pathlib import Path
-from typing import Union, List, Optional
+from typing import Union, List, Optional, Literal
 import tensorrt as trt
 import numpy as np
 import os
@@ -110,48 +110,50 @@ class Int8Calibrator(trt.IInt8EntropyCalibrator2):
         return [int(self.device_input)]
 
     def read_calibration_cache(self):
-        if os.path.exists(self.cache_file):
+        if self.cache_file and os.path.exists(self.cache_file):
             print(f"Using cached calibration data from {self.cache_file}")
             with open(self.cache_file, "rb") as f:
                 return f.read()
         return None
 
     def write_calibration_cache(self, cache):
-        with open(self.cache_file, "wb") as f:
-            f.write(cache)
-        print(f"Calibration cache saved to {self.cache_file}")
+        if self.cache_file:
+            with open(self.cache_file, "wb") as f:
+                f.write(cache)
+            print(f"Calibration cache saved to {self.cache_file}")
 
     def __del__(self):
         """Free device memory"""
         if self.device_input is not None:
             cudart.cudaFree(self.device_input)
 
-def build_int8_engine(onnx_file_path,
-                      calibration_images,
-                      engine_file_path=None,
-                      calibration_cache=None,
-                      min_batch=1,
-                      opt_batch=32,
-                      max_batch=32,
-                      input_shape=(1, 3, 224, 224)):
+
+
+def build_trt_engine(
+    onnx_file_path,
+    engine_file_path=None,
+    min_batch=1,
+    opt_batch=32,
+    max_batch=32,
+    precision:  Literal['fp32', 'fp16', 'int8'] = 'fp32',
+    calibration_images=None,
+    calibration_cache=None,
+):
     """
-    Build INT8 TensorRT engine from ONNX model with dynamic batch size support
+    Build a TensorRT engine from an ONNX model with dynamic batching and selectable precision.
 
     Args:
-        onnx_file_path: Path to ONNX model
-        engine_file_path: Path to save TensorRT engine
-        calibration_images: List of image paths for INT8 calibration
-        calibration_cache: Path to calibration cache file
-        min_batch: Minimum batch size for dynamic batching
-        opt_batch: Optimal batch size for auto-tuner optimization
-        max_batch: Maximum batch size for dynamic batching
-        input_shape: Input tensor shape (batch, channels, height, width)
-                    Note: batch dimension will be overridden by min/opt/max_batch
-
+        onnx_file_path: Path to ONNX model.
+        engine_file_path: Path to save TensorRT engine.
+        calibration_images: List of image paths for INT8 calibration (INT8 only).
+        calibration_cache: Path to calibration cache file (INT8 only).
+        min_batch, opt_batch, max_batch: Batch sizes for dynamic batching.
+        input_shape: Input tensor shape (batch, channels, height, width).
+        precision: "int8", "fp16", or "fp32".
     Returns:
-        TensorRT engine or None if failed
+        TensorRT engine or None if failed.
     """
-
+    input_shape=(1, 3, 224, 224)
     try:
         err, device_count = cudart.cudaGetDeviceCount()
         if err != cudart.cudaError_t.cudaSuccess or device_count == 0:
@@ -161,16 +163,15 @@ def build_int8_engine(onnx_file_path,
         print(f"CUDA initialization error: {e}")
         return None
 
-    if opt_batch>max_batch:
-        opt_batch=max_batch
+    if opt_batch > max_batch:
+        opt_batch = max_batch
         warnings.warn(
-            "Optimal batch size was greater than maximum batch number! Optimal batch number is Reduced to max batch number",
-            Warning
+            "Optimal batch size was greater than maximum batch number! Optimal batch number is reduced to match maximum batch number",
+            Warning,
         )
 
     TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
     builder = trt.Builder(TRT_LOGGER)
-
     network_flags = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
     network = builder.create_network(network_flags)
     parser = trt.OnnxParser(network, TRT_LOGGER)
@@ -188,7 +189,6 @@ def build_int8_engine(onnx_file_path,
     print(f"Network inputs: {[network.get_input(i).name for i in range(network.num_inputs)]}")
     print(f"Network outputs: {[network.get_output(i).name for i in range(network.num_outputs)]}")
 
-
     config = builder.create_builder_config()
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 2 << 30)
     input_tensor = network.get_input(0)
@@ -205,20 +205,40 @@ def build_int8_engine(onnx_file_path,
     profile.set_shape(input_name, min_shape, opt_shape, max_shape)
     config.add_optimization_profile(profile)
 
-    config.set_flag(trt.BuilderFlag.INT8)
-    # For TensorRT 10.1+, also enable FP16 as a fallback
-    config.set_flag(trt.BuilderFlag.FP16)
+    # Precision configuration
+    if precision.lower() == "int8":
+        config.set_flag(trt.BuilderFlag.INT8)
+        config.set_flag(trt.BuilderFlag.FP16)
+        if calibration_images is None and calibration_cache is None:
+            raise ValueError("For INT8 precision, either calibration_images or calibration_cache must be provided.")
+        if calibration_cache is not None and not os.path.exists(calibration_cache):
+            if calibration_images is None:
+                raise ValueError(
+                    f"Calibration cache '{calibration_cache}' does not exist and no calibration_images provided.")
+            print(f"Cache file '{calibration_cache}' not found. Will calibrate using images and save cache.")
 
-    calibrator = Int8Calibrator(
-        calibration_images=calibration_images,
-        cache_file=calibration_cache,
-        batch_size=opt_batch,
-        input_shape=(opt_batch, C, H, W)
-    )
+        # Determine cache behavior based on provided arguments
+        if calibration_images is not None:
+            # Images provided: calibrate using images
+            cache_to_save = calibration_cache  # Save cache if path provided, None otherwise
+            print(
+                f"Calibrating with images. Cache will {'be saved to ' + str(cache_to_save) if cache_to_save else 'not be saved'}.")
+        else:
+            # Only cache provided: use existing cache, don't save
+            cache_to_save = None
+            print(f"Using existing calibration cache from '{calibration_cache}'. No recalibration needed.")
 
-    config.int8_calibrator = calibrator
+        calibrator = Int8Calibrator(
+            calibration_images=calibration_images,
+            cache_file=calibration_cache,
+            batch_size=opt_batch,
+            input_shape=(opt_batch, C, H, W),
+        )
+        config.int8_calibrator = calibrator
+    elif precision.lower() == "fp16":
+        config.set_flag(trt.BuilderFlag.FP16)
 
-    print("Building INT8 TensorRT engine with dynamic batch support... This may take a while.")
+    print(f"Building {precision.upper()} TensorRT engine with dynamic batch support... This may take a while.")
     serialized_engine = builder.build_serialized_network(network, config)
     if serialized_engine is None:
         raise RuntimeError("ERROR: Failed to build engine")
@@ -230,8 +250,6 @@ def build_int8_engine(onnx_file_path,
             print(f"Engine saved to: {engine_file_path}")
 
     print(f"Engine supports dynamic batch sizes from {min_batch} to {max_batch}")
-    # runtime = trt.Runtime(TRT_LOGGER)
-    # engine = runtime.deserialize_cuda_engine(serialized_engine)
-    # return engine
-
-    return True
+    runtime = trt.Runtime(TRT_LOGGER)
+    engine = runtime.deserialize_cuda_engine(serialized_engine)
+    return engine

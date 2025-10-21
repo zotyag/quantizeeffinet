@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Union, Optional, Dict, Tuple, Literal
 import logging
 from .utils import make_model
-from .onnx_to_trtengine import *
+from .onnx_to_trtengine import build_trt_engine
 
 
 class ModelConverter:
@@ -129,6 +129,8 @@ class ModelConverter:
         except Exception as e:
             self.logger.warning(f"ONNX validation failed: {e}")
             return False
+
+
 
     def convert_to_trt(
             self,
