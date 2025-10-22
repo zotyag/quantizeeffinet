@@ -61,7 +61,6 @@ class ModelConverter:
         Args:
             input_model: Path to TensorFlow SavedModel directory
             output_path: Path where ONNX model will be saved (e.g., 'model.onnx')
-            input_signature: Optional input signature for the model
 
         Returns:
             Path object pointing to the saved ONNX model
@@ -285,7 +284,7 @@ class ModelConverter:
             self.logger.info("=" * 60)
             engine = build_trt_engine(
                 onnx_file_path=onnx_path,
-                engine_file_path=str(engine_file_path) if engine_file_path else None,
+                engine_file_path=engine_file_path if engine_file_path else None,
                 min_batch=min_batch,
                 opt_batch=opt_batch,
                 max_batch=max_batch,

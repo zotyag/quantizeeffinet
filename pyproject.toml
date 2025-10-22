@@ -1,0 +1,27 @@
+[project]
+name = "quantizeeffinet"
+version = "1.0.0"
+description = "A simple package for converting TensorFlow models to ONNX and TensorRT formats."
+authors = [
+    { name="Zolta Gombar", email="g0z4@mailbox.unideb.hu" }
+]
+readme = "README.md"
+requires-python = ">=3.8"
+keywords = ["tensorflow", "onnx", "tensorrt", "model-conversion", "deep-learning", "machine-learning"]
+dependencies = [
+    "tensorflow>=2.0",
+    "tf2onnx",
+    "onnx",
+    "onnxconverter-common",
+    "tensorrt",
+    "numpy",
+    "Pillow",
+    "cuda-python",
+]
+
+[project.urls]
+Repository = "https://github.com/zotyag/quantizeeffinet"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"

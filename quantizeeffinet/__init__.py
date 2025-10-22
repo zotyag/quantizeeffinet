@@ -14,7 +14,7 @@ Usage:
     )
 """
 
-from .converter import *
+from .converter import ModelConverter
 
 # Package metadata
 __version__ = "1.0.0"
