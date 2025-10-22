@@ -6,6 +6,7 @@ import numpy as np
 import os
 from cuda import cuda, cudart
 from PIL import Image
+import onnx
 
 
 
@@ -187,15 +188,25 @@ def build_trt_engine(
     network = builder.create_network(network_flags)
     parser = trt.OnnxParser(network, TRT_LOGGER)
 
-    print(f"Loading ONNX file: {onnx_file_path}")
-    if not os.path.exists(onnx_file_path):
-        raise FileNotFoundError(f"ONNX file not found: {onnx_file_path}")
-    with open(onnx_file_path, "rb") as model:
-        if not parser.parse(model.read()):
-            print("ERROR: Failed to parse ONNX file")
-            for error in range(parser.num_errors):
-                print(parser.get_error(error))
-            return None
+    if isinstance(onnx_file_path, (str, os.PathLike)):
+        print(f"Loading ONNX file: {onnx_file_path}")
+        if not os.path.exists(onnx_file_path):
+            raise FileNotFoundError(f"ONNX file not found: {onnx_file_path}")
+        with open(onnx_file_path, "rb") as model:
+            model_bytes = model.read()
+    elif isinstance(onnx_file_path, onnx.ModelProto):
+        print("Loading ONNX model from ModelProto object")
+        model_bytes = onnx_file_path.SerializeToString()
+    else:
+        raise TypeError(
+            f"onnx_file_path must be either a string (file path) or onnx.ModelProto object, "
+            f"got {type(onnx_file_path)}"
+        )
+    if not parser.parse(model_bytes):
+        print("ERROR: Failed to parse ONNX file")
+        for error in range(parser.num_errors):
+            print(parser.get_error(error))
+        return None
     print(f"Completed parsing ONNX file")
     print(f"Network inputs: {[network.get_input(i).name for i in range(network.num_inputs)]}")
     print(f"Network outputs: {[network.get_output(i).name for i in range(network.num_outputs)]}")

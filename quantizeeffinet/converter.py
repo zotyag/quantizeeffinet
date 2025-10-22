@@ -29,8 +29,7 @@ class ModelConverter:
         max_workspace_size (int): Maximum GPU memory for TensorRT (bytes)
     """
 
-    def __init__(self, max_workspace_size: int = (1 << 30)):
-        self.max_workspace_size = max_workspace_size
+    def __init__(self):
         self.trt_logger = trt.Logger(trt.Logger.WARNING)
         self.logger = self._setup_logger()
 
@@ -46,12 +45,12 @@ class ModelConverter:
 
     def tf_to_onnx(
             self,
-            model_path: Union[str, Path],
+            input_model: Union[str, Path],
             output_path: Optional[Union[str, Path]] = None,
             precision: Literal['fp32', 'fp16'] = 'fp32',
             only_weigths_of_model: Literal['EfficientNetB3', 'EfficientNetB5', 'EfficientNetB6', None] = None,
             opset: int = 13
-    ) -> tf.keras.Model:
+    ) -> onnx.ModelProto:
         """
         Convert TensorFlow SavedModel to ONNX format.
 
@@ -60,7 +59,7 @@ class ModelConverter:
         various inference frameworks or converted to TensorRT.
 
         Args:
-            model_path: Path to TensorFlow SavedModel directory
+            input_model: Path to TensorFlow SavedModel directory
             output_path: Path where ONNX model will be saved (e.g., 'model.onnx')
             input_signature: Optional input signature for the model
 
@@ -72,26 +71,26 @@ class ModelConverter:
             RuntimeError: If conversion fails
         """
 
-        model_path = Path(model_path)
+        input_model = Path(input_model)
         if output_path:
             output_path = Path(output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-        if not model_path.exists():
-            raise FileNotFoundError(f"TensorFlow model not found: {model_path}")
+        if not input_model.exists():
+            raise FileNotFoundError(f"TensorFlow model not found: {input_model}")
         precision = precision.lower()
         if precision not in ['fp32', 'fp16']:
             raise ValueError(f"Invalid precision: {precision}. Must be 'fp32' or 'fp16', int8 is only supported in TensorRT")
         self.logger.info(f"Converting TensorFlow model to ONNX...")
-        self.logger.info(f"  Input: {model_path}")
+        self.logger.info(f"  Input: {input_model}")
         self.logger.info(f"  Output: {output_path}")
         self.logger.info(f"  Opset: {opset}")
 
         try:
             if only_weigths_of_model:
                 model = make_model(3, base_model=only_weigths_of_model)
-                model.load_weights(model_path)
+                model.load_weights(input_model)
             else:
-                model = tf.keras.models.load_model(model_path)
+                model = tf.keras.models.load_model(input_model)
 
             spec = (tf.TensorSpec((None, 224, 224, 3), tf.float32, name="input"),)
             onnx_model, _ = tf2onnx.convert.from_keras(
@@ -138,7 +137,7 @@ class ModelConverter:
 
     def onnx_to_trt(
             self,
-            onnx_file_path: Union[str, Path],
+            input_model: Union[str, Path, onnx.ModelProto],
             engine_file_path: Optional[Union[str, Path]] = None,
             min_batch: int = 1,
             opt_batch: int = 32,
@@ -152,7 +151,7 @@ class ModelConverter:
         Convert ONNX model to TensorRT engine with comprehensive error handling and validation.
 
         Args:
-            onnx_file_path: Path to the ONNX model file.
+            input_model: Path to the ONNX model file (str/Path) or ONNX ModelProto object.
             engine_file_path: Path where the TensorRT engine will be saved.
                              If None and auto_generate_engine_path=True, auto-generates path.
             min_batch: Minimum batch size for dynamic batching.
@@ -176,14 +175,19 @@ class ModelConverter:
         """
 
         try:
-            onnx_path = Path(onnx_file_path)
-            if not onnx_path.exists():
-                raise FileNotFoundError(f"ONNX file not found: {onnx_path}")
-            if not onnx_path.is_file():
-                raise ValueError(f"ONNX path is not a file: {onnx_path}")
-            if onnx_path.suffix.lower() != '.onnx':
-                self.logger.warning(f"File extension is '{onnx_path.suffix}', expected '.onnx'")
-            self.logger.info(f"✓ ONNX file validated: {onnx_path}")
+            if isinstance(input_model, (str, os.PathLike)):
+                print(f"Loading ONNX file: {input_model}")
+                if not os.path.exists(input_model):
+                    raise FileNotFoundError(f"ONNX file not found: {input_model}")
+                onnx_path=input_model
+            elif isinstance(input_model, onnx.ModelProto):
+                print("Loading ONNX model from ModelProto object")
+                onnx_path=input_model
+            else:
+                raise TypeError(
+                    f"onnx_file_path must be either a string (file path) or onnx.ModelProto object, "
+                    f"got {type(input_model)}"
+                )
 
 
             if engine_file_path is None:
@@ -280,7 +284,7 @@ class ModelConverter:
             self.logger.info("Starting TensorRT engine build process...")
             self.logger.info("=" * 60)
             engine = build_trt_engine(
-                onnx_file_path=str(onnx_path),
+                onnx_file_path=onnx_path,
                 engine_file_path=str(engine_file_path) if engine_file_path else None,
                 min_batch=min_batch,
                 opt_batch=opt_batch,
@@ -322,84 +326,68 @@ class ModelConverter:
 
 
 
-
-    def convert_full_pipeline(
+    def tf_to_trt(
             self,
-            tf_model_path: Union[str, Path],
-            output_dir: Union[str, Path],
-            model_name: str = "model",
-            keep_onnx: bool = True
-    ) -> Dict[str, Path]:
+            input_model: Union[str, Path, onnx.ModelProto],
+            engine_file_path: Optional[Union[str, Path]] = None,
+            only_weigths_of_model: Literal['EfficientNetB3', 'EfficientNetB5', 'EfficientNetB6', None] = None,
+            min_batch: int = 1,
+            opt_batch: int = 32,
+            max_batch: int = 32,
+            precision: Literal['fp32', 'fp16', 'int8'] = 'fp32',
+            calibration_images: Union[str, Path, List[Union[str, Path]]] = None,
+            calibration_cache: Optional[Union[str, Path]] = None,
+            auto_generate_engine_path: bool = False,
+    ) -> Optional[trt.ICudaEngine]:
         """
-        Run full conversion pipeline: TensorFlow -> ONNX -> TensorRT.
-
-        This is a convenience method that runs both conversion steps
-        in sequence, handling intermediate files automatically.
+        Convert TensorFlow model directly to TensorRT engine.
 
         Args:
-            tf_model_path: Path to TensorFlow SavedModel directory
-            output_dir: Directory where output files will be saved
-            model_name: Base name for output files (default: 'model')
-            keep_onnx: Whether to keep intermediate ONNX file (default: True)
+            input_model: Path to TensorFlow SavedModel directory.
+            engine_file_path: Path where the TensorRT engine will be saved.
+                             If None and auto_generate_engine_path=True, auto-generates path.
+            min_batch: Minimum batch size for dynamic batching.
+            opt_batch: Optimal batch size for optimization.
+            max_batch: Maximum batch size for dynamic batching.
+            precision: Precision mode: 'fp32', 'fp16', or 'int8'.
+            calibration_images: For INT8 calibration. Can be:
+                               - Single directory path containing images
+                               - Single image file path
+                               - List of image file paths
+            calibration_cache: Path to calibration cache file
+            auto_generate_engine_path: If True, auto-generates engine path from model path.
 
         Returns:
-            Dictionary containing paths to generated files:
-            - 'onnx': Path to ONNX model (if keep_onnx=True)
-            - 'tensorrt': Path to TensorRT engine
+            TensorRT engine object if successful, None otherwise.
 
-        Example:
-            >>> converter = ModelConverter(precision='fp16')
-            >>> results = converter.convert_full_pipeline(
-            ...     tf_model_path='saved_model/',
-            ...     output_dir='outputs/',
-            ...     model_name='resnet50'
-            ... )
-            >>> print(f"TensorRT engine: {results['tensorrt']}")
+        Raises:
+            FileNotFoundError: If input_model doesn't exist.
+            ValueError: If input validation fails.
+            RuntimeError: If conversion fails.
         """
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Define output paths
-        onnx_path = output_dir / f"{model_name}.onnx"
-        trt_path = output_dir / f"{model_name}.trt"
+        onnx_model=self.tf_to_onnx(
+            input_model=input_model,
+            output_path=None,
+            precision="fp32",
+            only_weigths_of_model=only_weigths_of_model,
+            opset=13
+        )
 
-        self.logger.info("=" * 60)
-        self.logger.info("Starting full conversion pipeline")
-        self.logger.info("=" * 60)
+        engine = self.onnx_to_trt(
+            input_model=onnx_model,
+            engine_file_path=engine_file_path,
+            min_batch=min_batch,
+            opt_batch=opt_batch,
+            max_batch=max_batch,
+            precision=precision,
+            calibration_images=calibration_images,
+            calibration_cache=calibration_cache,
+            auto_generate_engine_path=auto_generate_engine_path
+        )
 
-        # Step 1: TensorFlow -> ONNX
-        self.logger.info("Step 1/2: Converting TensorFlow to ONNX...")
-        self.convert_to_onnx(tf_model_path, onnx_path)
+        return engine
 
-        # Step 2: ONNX -> TensorRT
-        self.logger.info("Step 2/2: Converting ONNX to TensorRT...")
-        self.convert_to_trt(onnx_path, trt_path)
 
-        # Clean up ONNX if requested
-        results = {'tensorrt': trt_path}
-        if keep_onnx:
-            results['onnx'] = onnx_path
-        else:
-            onnx_path.unlink()
-            self.logger.info(f"  Removed intermediate ONNX file")
-
-        self.logger.info("=" * 60)
-        self.logger.info("✓ Conversion pipeline completed successfully!")
-        self.logger.info("=" * 60)
-
-        return results
-
-    def get_config(self) -> Dict:
-        """
-        Get current converter configuration.
-
-        Returns:
-            Dictionary with converter settings
-        """
-        return {
-            'opset': self.opset,
-            'precision': self.precision,
-            'max_workspace_size': self.max_workspace_size
-        }
 
 
