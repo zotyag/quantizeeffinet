@@ -1,13 +1,17 @@
+import warnings
+
 import tensorflow as tf
 import tf2onnx
 import onnx
 from onnxconverter_common import float16
 import tensorrt as trt
 from pathlib import Path
-from typing import Union, Optional, Dict, Tuple, Literal
+from typing import Union, Optional, Dict, Tuple, Literal, List
 import logging
 from .utils import make_model
 from .onnx_to_trtengine import build_trt_engine
+import os
+
 
 
 class ModelConverter:
@@ -40,7 +44,7 @@ class ModelConverter:
             logger.addHandler(handler)
         return logger
 
-    def convert_to_onnx(
+    def tf_to_onnx(
             self,
             model_path: Union[str, Path],
             output_path: Optional[Union[str, Path]] = None,
@@ -71,12 +75,12 @@ class ModelConverter:
         model_path = Path(model_path)
         if output_path:
             output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
         if not model_path.exists():
             raise FileNotFoundError(f"TensorFlow model not found: {model_path}")
         precision = precision.lower()
         if precision not in ['fp32', 'fp16']:
             raise ValueError(f"Invalid precision: {precision}. Must be 'fp32' or 'fp16', int8 is only supported in TensorRT")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
         self.logger.info(f"Converting TensorFlow model to ONNX...")
         self.logger.info(f"  Input: {model_path}")
         self.logger.info(f"  Output: {output_path}")
@@ -89,7 +93,7 @@ class ModelConverter:
             else:
                 model = tf.keras.models.load_model(model_path)
 
-            spec = (tf.TensorSpec((None, 3, 224, 224), tf.float32, name="input"),)
+            spec = (tf.TensorSpec((None, 224, 224, 3), tf.float32, name="input"),)
             onnx_model, _ = tf2onnx.convert.from_keras(
                 model,
                 input_signature=spec,
@@ -104,7 +108,7 @@ class ModelConverter:
                 self._validate_onnx(output_path)
             else:
                 self._validate_onnx(onnx_model)
-            self.logger.info(f"Successfully converted to ONNX: {output_path}")
+            self.logger.info(f"Successfully converted to ONNX")
             return onnx_model
 
         except Exception as e:
@@ -132,110 +136,192 @@ class ModelConverter:
 
 
 
-    def convert_to_trt(
+    def onnx_to_trt(
             self,
-            onnx_path: Union[str, Path],
-            output_path: Union[str, Path],
-            input_shape: Optional[Tuple] = None
-    ) -> Path:
+            onnx_file_path: Union[str, Path],
+            engine_file_path: Optional[Union[str, Path]] = None,
+            min_batch: int = 1,
+            opt_batch: int = 32,
+            max_batch: int = 32,
+            precision: Literal['fp32', 'fp16', 'int8'] = 'fp32',
+            calibration_images: Union[str, Path, List[Union[str, Path]]] = None,
+            calibration_cache: Optional[Union[str, Path]] = None,
+            auto_generate_engine_path: bool = False,
+    ) -> Optional[trt.ICudaEngine]:
         """
-        Convert ONNX model to TensorRT engine.
-
-        This method builds an optimized TensorRT engine from an ONNX model.
-        The engine is optimized for the specific GPU it's built on and
-        provides maximum inference performance.
+        Convert ONNX model to TensorRT engine with comprehensive error handling and validation.
 
         Args:
-            onnx_path: Path to ONNX model file
-            output_path: Path where TensorRT engine will be saved (e.g., 'model.trt')
-            input_shape: Optional tuple to override input shape (e.g., (1, 224, 224, 3))
+            onnx_file_path: Path to the ONNX model file.
+            engine_file_path: Path where the TensorRT engine will be saved.
+                             If None and auto_generate_engine_path=True, auto-generates path.
+            min_batch: Minimum batch size for dynamic batching.
+            opt_batch: Optimal batch size for optimization.
+            max_batch: Maximum batch size for dynamic batching.
+            precision: Precision mode - 'fp32', 'fp16', or 'int8'.
+            calibration_images: For INT8 calibration. Can be:
+                               - Single directory path (str/Path) containing images
+                               - Single image file path (str/Path)
+                               - List of image file paths
+            calibration_cache: Path to calibration cache file (for INT8).
+            auto_generate_engine_path: If True, auto-generates engine path from ONNX path.
 
         Returns:
-            Path object pointing to the saved TensorRT engine
+            TensorRT engine object if successful, None otherwise.
 
         Raises:
-            FileNotFoundError: If onnx_path doesn't exist
-            RuntimeError: If engine building fails
-
-        Example:
-            >>> converter = ModelConverter(precision='fp16')
-            >>> trt_path = converter.convert_to_trt(
-            ...     onnx_path='model.onnx',
-            ...     output_path='model.trt'
-            ... )
+            ValueError: If input validation fails.
+            FileNotFoundError: If required files are not found.
+            RuntimeError: If engine build fails.
         """
-        onnx_path = Path(onnx_path)
-        output_path = Path(output_path)
-
-        # Validate input
-        if not onnx_path.exists():
-            raise FileNotFoundError(f"ONNX model not found: {onnx_path}")
-
-        # Create output directory if needed
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        self.logger.info(f"Building TensorRT engine...")
-        self.logger.info(f"  Input: {onnx_path}")
-        self.logger.info(f"  Output: {output_path}")
-        self.logger.info(f"  Precision: {self.precision}")
-        self.logger.info(f"  Workspace: {self.max_workspace_size / (1 << 30):.1f}GB")
 
         try:
-            # Create TensorRT builder
-            with trt.Builder(self.trt_logger) as builder, \
-                    builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)) as network, \
-                    builder.create_builder_config() as config, \
-                    trt.OnnxParser(network, self.trt_logger) as parser:
+            onnx_path = Path(onnx_file_path)
+            if not onnx_path.exists():
+                raise FileNotFoundError(f"ONNX file not found: {onnx_path}")
+            if not onnx_path.is_file():
+                raise ValueError(f"ONNX path is not a file: {onnx_path}")
+            if onnx_path.suffix.lower() != '.onnx':
+                self.logger.warning(f"File extension is '{onnx_path.suffix}', expected '.onnx'")
+            self.logger.info(f"✓ ONNX file validated: {onnx_path}")
 
-                # Configure builder
-                config.max_workspace_size = self.max_workspace_size
 
-                # Set precision mode
-                if self.precision == 'fp16':
-                    if builder.platform_has_fast_fp16:
-                        config.set_flag(trt.BuilderFlag.FP16)
-                        self.logger.info("  FP16 mode enabled")
+            if engine_file_path is None:
+                if auto_generate_engine_path:
+                    engine_file_path = onnx_path.with_suffix('.trt')
+                    self.logger.info(f"Auto-generated engine path: {engine_file_path}")
+                else:
+                    self.logger.info("No engine file path provided. Engine will not be saved to disk.")
+            else:
+                engine_file_path = Path(engine_file_path)
+
+
+            if min_batch < 1:
+                raise ValueError(f"min_batch must be >= 1, got {min_batch}")
+            if opt_batch < min_batch:
+                raise ValueError(f"opt_batch ({opt_batch}) must be >= min_batch ({min_batch})")
+            if opt_batch > max_batch:
+                opt_batch = max_batch
+                warnings.warn(
+                    "Optimal batch size was greater than maximum batch number! Optimal batch number is reduced to match maximum batch number",
+                    Warning,)
+            self.logger.info(f"✓ Batch sizes validated: min={min_batch}, opt={opt_batch}, max={max_batch}")
+
+            valid_precisions = ['fp32', 'fp16', 'int8']
+            if precision.lower() not in valid_precisions:
+                raise ValueError(f"Invalid precision '{precision}'. Must be one of {valid_precisions}")
+            self.logger.info(f"✓ Precision mode: {precision.upper()}")
+
+
+            # ============= INT8 Calibration Validation =============
+            processed_calibration_images = None
+            if precision.lower() == 'int8':
+                if calibration_images is None and calibration_cache is None:
+                    raise ValueError(
+                        "INT8 precision requires either calibration_images or calibration_cache. "
+                        "Please provide at least one."
+                    )
+
+                # Process calibration_images parameter
+                if calibration_images is not None:
+                    calib_path = Path(calibration_images) if isinstance(calibration_images, (str, Path)) else None
+
+                    # Case 1: Directory path - collect all images
+                    if calib_path and calib_path.is_dir():
+                        self.logger.info(f"Scanning directory for calibration images: {calib_path}")
+                        image_extensions = {'.jpg', '.jpeg', '.png'}
+                        processed_calibration_images = [
+                            str(img) for img in calib_path.rglob('*')
+                            if img.suffix.lower() in image_extensions and img.is_file()
+                        ]
+                        if not processed_calibration_images:
+                            raise ValueError(f"No image files found in directory: {calib_path}")
+                        self.logger.info(f"✓ Found {len(processed_calibration_images)} images in directory")
+
+                    # Case 2: Single file path
+                    elif calib_path and calib_path.is_file():
+                        self.logger.info(f"Using single calibration image: {calib_path}")
+                        processed_calibration_images = [str(calib_path)]
+
+                    # Case 3: List of paths
+                    elif isinstance(calibration_images, (list, tuple)):
+                        if len(calibration_images) == 0:
+                            raise ValueError("calibration_images list is empty")
+
+                        processed_calibration_images = [str(Path(img)) for img in calibration_images]
+                        self.logger.info(f"Using {len(processed_calibration_images)} calibration images from list")
+
+                    # Case 4: Path doesn't exist (might be created or is invalid)
+                    elif calib_path:
+                        raise FileNotFoundError(f"Calibration images path not found: {calib_path}")
+
                     else:
-                        self.logger.warning("  FP16 not supported, using FP32")
+                        raise TypeError(
+                            f"calibration_images must be a string path, Path object, or list of paths. "
+                            f"Got {type(calibration_images)}"
+                        )
 
-                elif self.precision == 'int8':
-                    if builder.platform_has_fast_int8:
-                        config.set_flag(trt.BuilderFlag.INT8)
-                        self.logger.info("  INT8 mode enabled")
+                # Validate calibration cache if provided
+                if calibration_cache is not None:
+                    cache_path = Path(calibration_cache)
+                    if cache_path.exists():
+                        self.logger.info(f"✓ Using existing calibration cache: {cache_path}")
                     else:
-                        self.logger.warning("  INT8 not supported, using FP32")
+                        if calibration_images is None:
+                            raise FileNotFoundError(
+                                f"Calibration cache not found: {cache_path} "
+                                "and no calibration_images provided to generate it."
+                            )
+                        self.logger.info(f"Calibration cache will be created at: {cache_path}")
 
-                # Parse ONNX model
-                self.logger.info("  Parsing ONNX model...")
-                with open(onnx_path, 'rb') as model_file:
-                    if not parser.parse(model_file.read()):
-                        error_msgs = []
-                        for error_idx in range(parser.num_errors):
-                            error_msgs.append(str(parser.get_error(error_idx)))
-                        raise RuntimeError(f"ONNX parsing errors:\n" + "\n".join(error_msgs))
 
-                # Override input shape if provided
-                if input_shape:
-                    self.logger.info(f"  Setting input shape: {input_shape}")
-                    network.get_input(0).shape = input_shape
 
-                # Build engine
-                self.logger.info("  Building TensorRT engine (this may take a few minutes)...")
-                serialized_engine = builder.build_serialized_network(network, config)
+            self.logger.info("=" * 60)
+            self.logger.info("Starting TensorRT engine build process...")
+            self.logger.info("=" * 60)
+            engine = build_trt_engine(
+                onnx_file_path=str(onnx_path),
+                engine_file_path=str(engine_file_path) if engine_file_path else None,
+                min_batch=min_batch,
+                opt_batch=opt_batch,
+                max_batch=max_batch,
+                precision=precision,
+                calibration_images=processed_calibration_images,
+                calibration_cache=str(calibration_cache) if calibration_cache else None,
+            )
 
-                if serialized_engine is None:
-                    raise RuntimeError("Failed to build TensorRT engine")
 
-                # Save engine
-                with open(output_path, 'wb') as engine_file:
-                    engine_file.write(serialized_engine)
 
-                self.logger.info(f"✓ Successfully built TensorRT engine: {output_path}")
-                return output_path
+            if engine is None:
+                raise RuntimeError("Engine build failed - build_trt_engine returned None")
+            self.logger.info("=" * 60)
+            self.logger.info("✓ ENGINE BUILD SUCCESSFUL!")
+            self.logger.info("=" * 60)
+            if engine_file_path:
+                engine_size_mb = Path(engine_file_path).stat().st_size / (1024 * 1024)
+                self.logger.info(f"Engine saved: {engine_file_path} ({engine_size_mb:.2f} MB)")
+            return engine
 
+        except FileNotFoundError as e:
+            self.logger.error(f"File not found error: {e}")
+            raise
+        except ValueError as e:
+            self.logger.error(f"Validation error: {e}")
+            raise
+        except RuntimeError as e:
+            self.logger.error(f"Runtime error during engine build: {e}")
+            raise
+        except ImportError as e:
+            self.logger.error(f"Import error - missing required library: {e}")
+            self.logger.error("Make sure TensorRT, CUDA, and all dependencies are properly installed")
+            raise
         except Exception as e:
-            self.logger.error(f"✗ TensorRT engine building failed: {e}")
-            raise RuntimeError(f"Failed to build TensorRT engine: {e}")
+            self.logger.error(f"Unexpected error during engine build: {type(e).__name__}: {e}")
+            self.logger.exception("Full traceback:")
+            raise RuntimeError(f"Failed to build TensorRT engine: {e}") from e
+
+
+
 
     def convert_full_pipeline(
             self,
@@ -316,23 +402,4 @@ class ModelConverter:
             'max_workspace_size': self.max_workspace_size
         }
 
-
-# Allow running converter directly from command line
-if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) < 3:
-        print("Usage: python converter.py <tf_model_path> <output_dir> [model_name]")
-        sys.exit(1)
-
-    tf_path = sys.argv[1]
-    output_dir = sys.argv[2]
-    model_name = sys.argv[3] if len(sys.argv) > 3 else "model"
-
-    converter = ModelConverter(precision='fp16')
-    result = converter.convert_full_pipeline(tf_path, output_dir, model_name)
-
-    print("\nConversion complete!")
-    for key, path in result.items():
-        print(f"  {key}: {path}")
 

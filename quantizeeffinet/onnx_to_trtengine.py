@@ -14,7 +14,7 @@ class Int8Calibrator(trt.IInt8EntropyCalibrator2):
     INT8 Entropy Calibrator for TensorRT
     """
     def __init__(self,
-                 calibration_images: Union[str, Path, List[Union[str, Path]]],
+                 calibration_images: Optional[Union[str, Path, List[Union[str, Path]]]],
                  cache_file: Optional[Union[str, Path]]=None,
                  batch_size=8,
                  input_shape=(1, 3, 224, 224),
@@ -30,27 +30,32 @@ class Int8Calibrator(trt.IInt8EntropyCalibrator2):
         trt.IInt8EntropyCalibrator2.__init__(self)
         self.cache_file = cache_file
         self.batch_size = batch_size
-        self.current_index = 0
-        self.device_input = None
-        self._allocate_memory()
-
-        image_list: List[Union[str, Path]] = []
-        if isinstance(calibration_images, (str, Path)):
-            directory_path = Path(calibration_images)
-            if directory_path.is_dir():
-                for ext in ('*.jpg', '*.jpeg', '*.png'):
-                    image_list.extend(directory_path.glob(ext))
-            else:
-                image_list = [Path(calibration_images)]
-        elif isinstance(calibration_images, list):
-            image_list = calibration_images
-        else:
-            raise ValueError("calibration_images must be a directory path or a list of image paths.")
-        self.calibration_images = image_list[:max_nom_of_calibration_images]
-
         self.input_shape = input_shape
+        self.device_input = None
+        self.current_index = 0
+        self.calibration_images = []
+
         if len(self.input_shape) != 4:
             raise ValueError("Input shape must be 4-dimensional (N, C, H, W).")
+
+        if calibration_images is not None:
+            image_list: List[Union[str, Path]] = []
+            if isinstance(calibration_images, (str, Path)):
+                directory_path = Path(calibration_images)
+                if directory_path.is_dir():
+                    for ext in ('*.jpg', '*.jpeg', '*.png'):
+                        image_list.extend(directory_path.glob(ext))
+                else:
+                    image_list = [Path(calibration_images)]
+            elif isinstance(calibration_images, list):
+                image_list = calibration_images
+            else:
+                raise ValueError("calibration_images must be a directory path or a list of image paths.")
+            self.calibration_images = image_list[:max_nom_of_calibration_images]
+            self._allocate_memory()
+            print(f"Initialized calibrator with {len(self.calibration_images)} images")
+        else:
+            print("Initialized calibrator in cache-only mode (no images provided)")
 
     def _allocate_memory(self):
         batch_elements = self.batch_size * self.input_shape[1] * \
@@ -70,6 +75,10 @@ class Int8Calibrator(trt.IInt8EntropyCalibrator2):
         Get next batch of calibration data
         Returns device memory pointers
         """
+        # If no images provided, return None (will use cache)
+        if not self.calibration_images:
+            return None
+
         if self.current_index >= len(self.calibration_images):
             print(f"Calibration complete: processed {self.current_index} images")
             return None
@@ -110,6 +119,7 @@ class Int8Calibrator(trt.IInt8EntropyCalibrator2):
         return [int(self.device_input)]
 
     def read_calibration_cache(self):
+        """Read calibration cache from file if it exists"""
         if self.cache_file and os.path.exists(self.cache_file):
             print(f"Using cached calibration data from {self.cache_file}")
             with open(self.cache_file, "rb") as f:
@@ -117,6 +127,7 @@ class Int8Calibrator(trt.IInt8EntropyCalibrator2):
         return None
 
     def write_calibration_cache(self, cache):
+        """Write calibration cache to file"""
         if self.cache_file:
             with open(self.cache_file, "wb") as f:
                 f.write(cache)
