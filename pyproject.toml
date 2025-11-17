@@ -27,3 +27,9 @@ Repository = "https://github.com/zotyag/quantizeeffinet"
 [build-system]
 requires = ["hatchling >= 1.26"]
 build-backend = "hatchling.build"
+
+[tool.poetry.group.test.dependencies]
+pytest = [
+    {version = "^8.3", python = ">=3.8,<3.10"},
+    {version = "^9.0", python = ">=3.10"}
+]
