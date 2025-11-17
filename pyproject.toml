@@ -29,9 +29,6 @@ requires = ["hatchling >= 1.26"]
 build-backend = "hatchling.build"
 
 [tool.poetry.group.test.dependencies]
-pytest = "^8.0.0"  # or latest version
-
-[tool.poetry.group.test.dependencies]
 pytest = [
     {version = "^8.3", python = ">=3.8,<3.10"},
     {version = "^9.0", python = ">=3.10"}
