@@ -1,59 +1,104 @@
 name: Publish to PyPI
 
-# Trigger on pushes to the release branch
 on:
   push:
     branches:
-      - release
+      - release  # Only triggers on release branch
 
 jobs:
-  build:
-    name: Build distribution
+  test:
     runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v4
-      with:
-        persist-credentials: false
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.x"
-    
-    - name: Install build dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install build
-    
-    - name: Build package
-      run: python -m build
-    
-    - name: Store the distribution packages
-      uses: actions/upload-artifact@v4
-      with:
-        name: python-package-distributions
-        path: dist/
+      - uses: actions/checkout@v4
 
-  publish-to-pypi:
-    name: Publish to PyPI
-    needs:
-      - build
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+
+      - name: Install dependencies
+        run: poetry install --sync --no-interaction
+
+      - name: Run tests
+        run: poetry run pytest
+
+  check-pypi:
     runs-on: ubuntu-latest
-    
-    environment:
-      name: pypi
-      url: https://pypi.org/p/<your-package-name>  # Replace with your package name
-    
-    permissions:
-      id-token: write  # IMPORTANT: mandatory for trusted publishing
-    
     steps:
-    - name: Download distribution packages
-      uses: actions/download-artifact@v4
-      with:
-        name: python-package-distributions
-        path: dist/
-    
-    - name: Publish to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+
+      - name: Get version info
+        id: version
+        run: |
+          PACKAGE_NAME=$(poetry version | awk '{print $1}')
+          VERSION=$(poetry version -s)
+          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if version exists on PyPI
+        env:
+          PACKAGE_NAME: ${{ steps.version.outputs.package_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          response=$(curl -s https://pypi.org/pypi/$PACKAGE_NAME/json || echo "{}")
+          
+          if echo "$response" | grep -q "\"$VERSION\""; then
+            echo "Error: Version $VERSION already exists on PyPI"
+            echo "Please bump the version in pyproject.toml before pushing to release branch"
+            exit 1
+          fi
+          
+          echo "Version $VERSION is new and can be published"
+
+  build:
+    needs: [test, check-pypi]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+
+      - name: Build package
+        run: poetry build
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
