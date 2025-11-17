@@ -1,9 +1,9 @@
 [project]
 name = "quantizeeffinet"
-version = "1.0.0"
-description = "A simple package for converting TensorFlow models to ONNX and TensorRT formats."
+version = "0.0.0"
+description = "A simple package for converting TensorFlow Efficientnet models to ONNX and TensorRT formats."
 authors = [
-    { name="Zolta Gombar", email="g0z4@mailbox.unideb.hu" }
+    { name="Zolta Gombar", email="gombarzolta@gmail.com" }
 ]
 readme = "README.md"
 requires-python = ">=3.8"
@@ -18,6 +18,8 @@ dependencies = [
     "Pillow",
     "cuda-python",
 ]
+license = "Apache-2.0"
+license-files = ["src/quantizeeffinet/"]
 
 [project.urls]
 Repository = "https://github.com/zotyag/quantizeeffinet"

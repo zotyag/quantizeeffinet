@@ -145,6 +145,7 @@ class ModelConverter:
             calibration_images: Union[str, Path, List[Union[str, Path]]] = None,
             calibration_cache: Optional[Union[str, Path]] = None,
             auto_generate_engine_path: bool = False,
+            input_shape=(1, 3, 224, 224)
     ) -> Optional[trt.ICudaEngine]:
         """
         Convert ONNX model to TensorRT engine with comprehensive error handling and validation.
@@ -291,6 +292,7 @@ class ModelConverter:
                 precision=precision,
                 calibration_images=processed_calibration_images,
                 calibration_cache=str(calibration_cache) if calibration_cache else None,
+                input_shape=input_shape
             )
 
 

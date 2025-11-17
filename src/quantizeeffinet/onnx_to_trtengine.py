@@ -150,6 +150,7 @@ def build_trt_engine(
     precision:  Literal['fp32', 'fp16', 'int8'] = 'fp32',
     calibration_images=None,
     calibration_cache=None,
+    input_shape=(1, 3, 224, 224)
 ):
     """
     Build a TensorRT engine from an ONNX model with dynamic batching and selectable precision.
@@ -165,7 +166,6 @@ def build_trt_engine(
     Returns:
         TensorRT engine or None if failed.
     """
-    input_shape=(1, 3, 224, 224)
     try:
         err, device_count = cudart.cudaGetDeviceCount()
         if err != cudart.cudaError_t.cudaSuccess or device_count == 0:
