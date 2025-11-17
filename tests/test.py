@@ -1,10 +1,14 @@
 from pathlib import Path
-from quantizeeffinet.quantizeeffinet import ModelConverter
-
+from quantizeeffinet import ModelConverter
+import numpy as np
+if not hasattr(np, 'object'):
+    np.object = object
+# protobuff downgrade
 
 
 if __name__ == "__main__":
     converter = ModelConverter()
+
 
     # tfpath=Path("../../csomag6_GombarZolta_EfficientNet/models_tensorflow/Full_models/tf_full_model_b6.keras")
     # onnxpath = Path("../../csomag6_GombarZolta_EfficientNet/PackageTest/model_b6_fp32_olyweigts.onnx")
@@ -14,7 +18,7 @@ if __name__ == "__main__":
     #        model.graph.input])
 
     onnxpath=Path("../../csomag6_GombarZolta_EfficientNet/PackageTest/model_b6_fp32_olyweigts.onnx")
-    trtpath = Path("../../csomag6_GombarZolta_EfficientNet/PackageTest/int8_model_b6.engine")
+    trtpath = Path("../../csomag6_GombarZolta_EfficientNet/PackageTest/int8_model_b6_entropyv1.engine")
     imagepath=Path("../../csomag6_GombarZolta_EfficientNet/Calibration_images/equal_2200")
     cachepath=Path("../../csomag6_GombarZolta_EfficientNet/PackageTest/b6.cache")
     model=converter.onnx_to_trt(
@@ -26,17 +30,6 @@ if __name__ == "__main__":
         "int8",
         calibration_images=imagepath,
         calibration_cache=None
-    )
-
-    model=converter.onnx_to_trt(
-        input_model=onnxpath,
-        engine_file_path=trtpath,
-        min_batch=1,
-        max_batch=32,
-        opt_batch=32,
-        precision="int8",
-        calibration_images=imagepath,
-        calibration_cache=cachepath,
     )
 
     # tfpath = Path("../../csomag6_GombarZolta_EfficientNet/models_tensorflow/Full_models/tf_full_model_b6.keras")
@@ -52,5 +45,7 @@ if __name__ == "__main__":
     #     calibration_images=imagepath,
     #     calibration_cache=None,
     # )
+
+
 
 
