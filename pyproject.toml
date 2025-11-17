@@ -19,7 +19,7 @@ dependencies = [
     "cuda-python",
 ]
 license = "Apache-2.0"
-license-files = ["src/quantizeeffinet/"]
+license-files = ["LICENSE"]
 
 [project.urls]
 Repository = "https://github.com/zotyag/quantizeeffinet"
