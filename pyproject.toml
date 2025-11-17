@@ -1,6 +1,6 @@
 [project]
 name = "quantizeeffinet"
-version = "0.0.0"
+version = "0.0.1"
 description = "A simple package for converting TensorFlow Efficientnet models to ONNX and TensorRT formats."
 authors = [
     { name="Zolta Gombar", email="gombarzolta@gmail.com" }
