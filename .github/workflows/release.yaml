@@ -88,7 +88,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     environment:
-      name: release
+      name: pypi
     permissions:
       id-token: write
       contents: read
