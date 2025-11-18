@@ -1,5 +1,5 @@
 from pathlib import Path
-from quantizeeffinet import ModelConverter
+from quantizeeffinet.src.quantizeeffinet import ModelConverter
 import numpy as np
 if not hasattr(np, 'object'):
     np.object = object

@@ -4,7 +4,7 @@ from typing import Union, List, Optional, Literal
 import tensorrt as trt
 import numpy as np
 import os
-from cuda import cuda, cudart
+from cuda.bindings import driver as cuda, runtime as cudart
 from PIL import Image
 import onnx
 
