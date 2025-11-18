@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "quantizeeffinet"
-version = "0.0.2b1"
+version = "0.0.2b2"
 description = "A simple package for converting TensorFlow Efficientnet models to ONNX and TensorRT formats."
 authors = ["Zolta Gombar <gombarzolta@gmail.com>"]
 readme = "README.md"
@@ -32,7 +32,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "quantizeeffinet"
-version = "0.0.2b1"
+version = "0.0.2b2"
 description = "A simple package for converting TensorFlow Efficientnet models to ONNX and TensorRT formats."
 authors = [
     { name="Zolta Gombar", email="gombarzolta@gmail.com" }
